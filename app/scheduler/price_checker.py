@@ -14,7 +14,7 @@ from app.db.models import (
     update_product_price,
     save_price,
 )
-from app.db.supabase_client import get_supabase_client
+from app.db.supabase_client import get_supabase
 from app.notifications.notifier import send_price_drop_notification
 from app.parsers.base import get_parser, ParseError
 
@@ -79,7 +79,7 @@ class PriceCheckerScheduler:
 
         try:
             # Get Supabase client
-            supabase = get_supabase_client()
+               supabase = get_supabase()
 
             # Get all active products that need checking
             # (last_checked_at is null OR older than check_interval_hours)
