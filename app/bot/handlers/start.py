@@ -1,3 +1,14 @@
+from app.config import settings
+
+@router.message(Command("add"))
+async def cmd_add(message: Message, state: FSMContext):
+    # Проверка доступа
+    if message.from_user.id != settings.telegram_admin_id:
+        await message.answer("❌ Доступ запрещён. Этот бот только для администратора.")
+        return
+    
+    # ... остальной код
+
 """Start command handler."""
 
 import logging
