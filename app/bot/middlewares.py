@@ -4,9 +4,7 @@ import logging
 from typing import Any, Awaitable, Callable, Dict
 
 from aiogram import BaseMiddleware
-from aiogram.types import Message, CallbackQuery, Update
-
-from app.config import settings
+from aiogram.types import Update
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +34,9 @@ class AdminOnlyMiddleware(BaseMiddleware):
         Returns:
             Result of the next handler if access granted, None otherwise.
         """
+        # Import settings inside to avoid issues with circular imports
+        from app.config import settings
+        
         # Get user from message or callback query
         user = None
         if event.message:
