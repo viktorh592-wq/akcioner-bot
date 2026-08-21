@@ -164,3 +164,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"Fatal error: {e}")
         raise
+
+from app.bot.middlewares import AdminOnlyMiddleware
+
+dp.update.middleware(AdminOnlyMiddleware())
