@@ -21,18 +21,14 @@ wheels/
 .installed.cfg
 *.egg
 
-# Virtual environments
+# Virtual Environment
 venv/
+env/
 ENV/
-env.bak/
 .venv/
+.env/
 
-# Environment variables
-.env
-.env.local
-.env.*
-
-# IDE and editor files
+# IDE
 .vscode/
 .idea/
 *.swp
@@ -42,20 +38,21 @@ env.bak/
 # Logs
 *.log
 
-# Coverage reports
+# Environment variables
+.env
+.env.local
+.env.*
+
+# Coverage
 .coverage
+coverage/
 htmlcov/
-.coverage.*
 
 # Testing
 .pytest_cache/
 .mypy_cache/
 
-# Docker
-Dockerfile
-render.yaml
-
-# OS generated files
+# Distribution / packaging
 .DS_Store
 Thumbs.db
 ```
