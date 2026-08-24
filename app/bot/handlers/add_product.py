@@ -1,6 +1,7 @@
 """Add product handler (Russian)."""
 
 import asyncio
+import html
 import logging
 import re
 
@@ -17,7 +18,12 @@ logger = logging.getLogger(__name__)
 
 router = Router()
 
-PARSE_TIMEOUT_SECONDS = 30
+# Total budget for fetching product info. The WB antibot challenge can take
+# up to ~75s, so the outer timeout must be larger than the parser's own budget
+# (tier1 ~12s + tier2 ~10s + tier3 ~75s ≈ 97s worst case).
+PARSE_TIMEOUT_SECONDS = 100
+# Show a "still working" update if fetching takes longer than this
+PARSE_PROGRESS_AFTER = 25
 
 
 class AddProductState(StatesGroup):
@@ -30,6 +36,20 @@ def cancel_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text="❌ Отмена", callback_data="cancel")]]
     )
+
+
+async def _safe_cancel(task: "asyncio.Task") -> None:
+    """Cancel a parse task in the background without blocking the handler.
+
+    If the task is stuck inside Playwright cleanup, cancellation itself can
+    hang — that must never block the reply to the user, so we give the
+    cancellation its own short timeout and then simply abandon the task.
+    """
+    task.cancel()
+    try:
+        await asyncio.wait_for(asyncio.shield(task), timeout=15)
+    except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
+        pass
 
 
 @router.message(Command("add"))
@@ -80,20 +100,60 @@ async def process_url(message: Message, state: FSMContext) -> None:
 
     wait_msg = await message.answer("⏳ Получаю информацию о товаре...")
 
-    try:
-        product_data = await asyncio.wait_for(parser.parse(url), timeout=PARSE_TIMEOUT_SECONDS)
-    except asyncio.TimeoutError:
-        await wait_msg.edit_text(
-            "❌ Маркетплейс не ответил вовремя. Попробуй ещё раз через пару минут."
+    # Run the parse as an independent task. We deliberately do NOT use a bare
+    # `asyncio.wait_for(parser.parse(url))`: if the coroutine hangs inside
+    # Playwright cleanup, wait_for would wait for the cancellation to finish
+    # and the user would never get a reply (the "bot froze" bug). With the
+    # shield + task pattern we always answer on time and cancel in background.
+    parse_task = asyncio.create_task(parser.parse(url))
+
+    async def _show_progress() -> None:
+        await _edit_safely(
+            wait_msg,
+            "⏳ Маркетплейс проверяет запрос (антибот-защита)...\n"
+            "Это может занять до полутора минут — не спеши отправлять новые команды.",
         )
-        await state.clear()
-        return
+
+    loop = asyncio.get_running_loop()
+    progress_task = loop.call_later(PARSE_PROGRESS_AFTER, lambda: loop.create_task(_show_progress()))
+
+    timed_out = False
+    try:
+        product_data = await asyncio.wait_for(
+            asyncio.shield(parse_task), timeout=PARSE_TIMEOUT_SECONDS
+        )
+    except asyncio.TimeoutError:
+        timed_out = True
+        product_data = None
     except ParseError as e:
-        await wait_msg.edit_text(f"❌ {e}")
+        progress_task.cancel()
+        await _edit_safely(wait_msg, f"❌ {e}")
         await state.clear()
         return
     except Exception as e:
-        await wait_msg.edit_text(f"❌ Не удалось получить товар: {e}\n\nПопробуй ещё раз.")
+        logger.exception(f"Unexpected parse error for {url}")
+        progress_task.cancel()
+        await _edit_safely(
+            wait_msg, f"❌ Не удалось получить товар: {e}\n\nПопробуй ещё раз."
+        )
+        await state.clear()
+        return
+
+    progress_task.cancel()
+
+    if timed_out:
+        # Reply IMMEDIATELY; finish the stuck parse in the background.
+        asyncio.get_running_loop().create_task(_safe_cancel(parse_task))
+        await _edit_safely(
+            wait_msg,
+            "❌ Маркетплейс не ответил вовремя (защита от ботов).\n"
+            "Попробуй ещё раз через пару минут — команда /add.",
+        )
+        await state.clear()
+        return
+
+    if product_data is None:  # task was cancelled unexpectedly
+        await _edit_safely(wait_msg, "❌ Не удалось получить товар. Попробуй ещё раз.")
         await state.clear()
         return
 
@@ -105,16 +165,34 @@ async def process_url(message: Message, state: FSMContext) -> None:
         marketplace=parser.marketplace,
     )
 
-    await wait_msg.edit_text(
-        f"✅ Товар найден:\n\n<b>{product_data['title']}</b>\n\n"
+    title = product_data["title"]
+    if len(title) > 200:
+        title = title[:200] + "…"
+    safe_title = html.escape(title)
+
+    await _edit_safely(
+        wait_msg,
+        f"✅ Товар найден:\n\n<b>{safe_title}</b>\n\n"
         f"💵 Текущая цена: <b>{product_data['price']:,.0f} ₽</b>\n\n"
         "📉 Укажи диапазон цены, при которой я пришлю уведомление.\n"
         "Например: <b>1000-1500</b>\n\n"
         "(Если напишешь одно число — буду считать его максимальной ценой.)",
         parse_mode="HTML",
-        reply_markup=cancel_keyboard(),
+        keyboard=cancel_keyboard(),
     )
     await state.set_state(AddProductState.waiting_for_range)
+
+
+async def _edit_safely(msg: Message, text: str, parse_mode: str = None, keyboard=None) -> None:
+    """Edit the status message, ignoring Telegram API errors (e.g. duplicate text)."""
+    try:
+        await msg.edit_text(
+            text,
+            parse_mode=parse_mode,
+            reply_markup=keyboard,
+        )
+    except Exception:
+        pass
 
 
 def parse_range(text: str):
@@ -194,7 +272,7 @@ async def process_interval(callback: CallbackQuery, state: FSMContext) -> None:
 
     await callback.message.answer(
         "✅ <b>Товар добавлен!</b>\n\n"
-        f"📦 {data['title']}\n"
+        f"📦 {html.escape(str(data['title'])[:200])}\n"
         f"🎯 Диапазон: {data['min_price']}–{data['max_price']} ₽\n"
         f"⏰ Проверка: {interval_text}\n\n"
         "Я напишу тебе, когда цена попадёт в диапазон или упадёт ниже 📉\n\n"

@@ -1,5 +1,6 @@
 """Delete product handler (Russian)."""
 
+import asyncio
 import logging
 
 from aiogram import Router, F
@@ -38,7 +39,9 @@ async def cmd_delete(message: Message) -> None:
 async def cb_delete(callback: CallbackQuery) -> None:
     pid = callback.data[4:]
     supabase = get_supabase()
-    supabase.table("products").delete().eq("id", pid).execute()
+    await asyncio.to_thread(
+        lambda: supabase.table("products").delete().eq("id", pid).execute()
+    )
     try:
         await callback.message.edit_text("🗑 Товар удалён из отслеживания.")
     except Exception:
