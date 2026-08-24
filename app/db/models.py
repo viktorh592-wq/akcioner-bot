@@ -9,8 +9,13 @@ Schema matches existing Supabase tables:
             min_price, max_price, check_interval_hours, is_active,
             last_checked_at, last_price, created_at
 - price_history: id, product_id, price, checked_at
+
+The Supabase Python client is synchronous. Every DB helper below wraps its
+network calls in ``asyncio.to_thread`` so the event loop (and the Telegram
+bot running on it) is never blocked while a query is in flight.
 """
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from pydantic import BaseModel, Field
@@ -94,10 +99,14 @@ async def save_product(product: Product) -> Product:
 
     if product.id:
         # Update existing product
-        result = supabase.table("products").update(data).eq("id", product.id).execute()
+        result = await asyncio.to_thread(
+            lambda: supabase.table("products").update(data).eq("id", product.id).execute()
+        )
     else:
         # Insert new product
-        result = supabase.table("products").insert(data).execute()
+        result = await asyncio.to_thread(
+            lambda: supabase.table("products").insert(data).execute()
+        )
 
     if result.data:
         saved_data = result.data[0]
@@ -133,12 +142,15 @@ async def get_products_by_user(user_id: int, active_only: bool = True) -> list[P
     """
     supabase = get_supabase()
 
-    query = supabase.table("products").select("*").eq("telegram_user_id", user_id)
+    def _run():
+        query = supabase.table("products").select("*").eq("telegram_user_id", user_id)
 
-    if active_only:
-        query = query.eq("is_active", True)
+        if active_only:
+            query = query.eq("is_active", True)
 
-    result = query.execute()
+        return query.execute()
+
+    result = await asyncio.to_thread(_run)
 
     products = []
     for row in result.data or []:
@@ -173,7 +185,9 @@ async def get_product_by_id(product_id: str) -> Optional[Product]:
     """
     supabase = get_supabase()
 
-    result = supabase.table("products").select("*").eq("id", product_id).execute()
+    result = await asyncio.to_thread(
+        lambda: supabase.table("products").select("*").eq("id", product_id).execute()
+    )
 
     if result.data:
         row = result.data[0]
@@ -217,7 +231,9 @@ async def get_due_products(now_utc: datetime) -> list[Product]:
     # Using raw SQL via RPC would be ideal, but let's use client-side filtering
     
     # Get all active products
-    result = supabase.table("products").select("*").eq("is_active", True).execute()
+    result = await asyncio.to_thread(
+        lambda: supabase.table("products").select("*").eq("is_active", True).execute()
+    )
     
     due_products = []
     for row in result.data or []:
@@ -277,8 +293,8 @@ async def delete_product(product_id: str, user_id: int) -> bool:
     """
     supabase = get_supabase()
 
-    result = (
-        supabase.table("products")
+    result = await asyncio.to_thread(
+        lambda: supabase.table("products")
         .delete()
         .eq("id", product_id)
         .eq("telegram_user_id", user_id)
@@ -310,7 +326,9 @@ async def save_price(product_id: str, price: int, checked_at: Optional[datetime]
     if checked_at:
         data["checked_at"] = checked_at.isoformat()
 
-    result = supabase.table("price_history").insert(data).execute()
+    result = await asyncio.to_thread(
+        lambda: supabase.table("price_history").insert(data).execute()
+    )
 
     if result.data:
         saved_data = result.data[0]
@@ -350,7 +368,9 @@ async def update_product_price(product_id: str, new_price: int, title: Optional[
     if image_url:
         data["image_url"] = image_url
 
-    supabase.table("products").update(data).eq("id", product_id).execute()
+    await asyncio.to_thread(
+        lambda: supabase.table("products").update(data).eq("id", product_id).execute()
+    )
 
 
 async def toggle_product_active(product_id: str, is_active: bool) -> bool:
@@ -366,6 +386,11 @@ async def toggle_product_active(product_id: str, is_active: bool) -> bool:
     """
     supabase = get_supabase()
 
-    result = supabase.table("products").update({"is_active": is_active}).eq("id", product_id).execute()
-    
+    result = await asyncio.to_thread(
+        lambda: supabase.table("products")
+        .update({"is_active": is_active})
+        .eq("id", product_id)
+        .execute()
+    )
+
     return len(result.data or []) > 0
