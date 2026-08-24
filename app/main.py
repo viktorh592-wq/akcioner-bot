@@ -14,6 +14,7 @@ import uvicorn
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.types import BotCommand
 from fastapi import FastAPI
 
 from app.bot.handlers import (
@@ -55,6 +56,18 @@ async def run_health_server() -> None:
     await server.serve()
 
 
+async def set_bot_commands(bot: Bot) -> None:
+    """Set bot commands menu in Telegram."""
+    commands = [
+        BotCommand(command="start", description="🚀 Запустить бота"),
+        BotCommand(command="add", description="➕ Добавить товар"),
+        BotCommand(command="list", description="📋 Мои товары"),
+        BotCommand(command="help", description="❓ Помощь"),
+    ]
+    await bot.set_my_commands(commands)
+    logger.info("Bot commands menu configured")
+
+
 # ---------------------------------------------------------------------------
 # Main application
 # ---------------------------------------------------------------------------
@@ -67,6 +80,7 @@ async def main() -> None:
     )
 
     logger.info("Starting Price Tracker Bot...")
+    logger.info(f"Admin ID: {settings.telegram_admin_id}")
 
     # Fail fast on bad Supabase credentials
     get_supabase()
@@ -97,10 +111,13 @@ async def main() -> None:
     scheduler = get_scheduler(check_interval_minutes=10)
     scheduler.start()
 
+    # 3) Set bot commands menu
+    await set_bot_commands(bot)
+
     logger.info("All components started. Launching Telegram polling...")
 
     try:
-        # 3) Telegram bot polling (blocks until stopped)
+        # 4) Telegram bot polling (blocks until stopped)
         await dp.start_polling(bot)
     finally:
         logger.info("Shutting down...")
