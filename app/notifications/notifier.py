@@ -1,5 +1,6 @@
 """Notification module for sending price alerts (Russian)."""
 
+import html
 import logging
 from typing import Optional
 
@@ -47,12 +48,12 @@ async def send_price_drop_notification(
 
         message = (
             "🔔 <b>Цена попала в твой диапазон!</b>\n\n"
-            f"📦 <b>{title}</b>\n\n"
+            f"📦 <b>{html.escape(str(title)[:200])}</b>\n\n"
             f"💰 Цена сейчас: <b>{new_price:,.0f} ₽</b>\n"
             f"{discount_line}"
             f"🎯 Твой диапазон: {min_price:,.0f}–{max_price:,.0f} ₽\n\n"
             f"{notification_type}\n\n"
-            f"🔗 <a href='{url}'>Открыть товар</a>"
+            f"🔗 <a href='{html.escape(url)}'>Открыть товар</a>"
         )
 
         if image_url:
