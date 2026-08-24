@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -20,6 +20,37 @@ from app.parsers.base import get_parser, ParseError
 
 logger = logging.getLogger(__name__)
 
+# Hard limit for parsing a single product's price. Without this a stuck
+# parser (e.g. a browser wedged in antibot limbo) would block the whole
+# scheduler job forever and silently stop all future price checks.
+SINGLE_PRODUCT_PARSE_TIMEOUT = 120
+
+
+async def _parse_with_timeout(url: str) -> dict:
+    """Run parser.parse() with a hard timeout that never blocks the caller.
+
+    Uses the shield + task pattern: on timeout the task is cancelled in the
+    background, so even a Playwright cleanup deadlock cannot stall the
+    scheduler.
+    """
+    parser = get_parser(url)
+    task = asyncio.create_task(parser.parse(url))
+    try:
+        return await asyncio.wait_for(
+            asyncio.shield(task), timeout=SINGLE_PRODUCT_PARSE_TIMEOUT
+        )
+    except asyncio.TimeoutError:
+        asyncio.get_running_loop().create_task(_safe_cancel(task))
+        raise ParseError(f"Парсинг {url} превысил {SINGLE_PRODUCT_PARSE_TIMEOUT} с")
+
+
+async def _safe_cancel(task: "asyncio.Task") -> None:
+    task.cancel()
+    try:
+        await asyncio.wait_for(asyncio.shield(task), timeout=15)
+    except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
+        pass
+
 
 class PriceCheckerScheduler:
     """Scheduler for periodic price checking."""
@@ -36,6 +67,9 @@ class PriceCheckerScheduler:
             id="price_check",
             name="Check all product prices",
             replace_existing=True,
+            # Never pile up jobs if a previous run is stuck
+            max_instances=1,
+            coalesce=True,
         )
         self.scheduler.start()
         self._is_running = True
@@ -53,10 +87,12 @@ class PriceCheckerScheduler:
 
         try:
             supabase = get_supabase()
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc)
 
-            response = (
-                supabase.table("products")
+            # The Supabase client is synchronous — run it in a thread so it
+            # does not block the event loop (and the Telegram bot with it).
+            response = await asyncio.to_thread(
+                lambda: supabase.table("products")
                 .select("*")
                 .eq("is_active", True)
                 .execute()
@@ -77,8 +113,10 @@ class PriceCheckerScheduler:
                 check_interval_hours = product_data.get("check_interval_hours", 24)
 
                 if last_checked:
-                    last_checked_dt = datetime.fromisoformat(last_checked.replace("Z", "+00:00"))
-                    time_since_check = now - last_checked_dt.replace(tzinfo=None)
+                    last_checked_dt = datetime.fromisoformat(
+                        last_checked.replace("Z", "+00:00")
+                    )
+                    time_since_check = now - last_checked_dt
 
                     if time_since_check < timedelta(hours=check_interval_hours):
                         continue
@@ -115,8 +153,7 @@ class PriceCheckerScheduler:
         title = product_data.get("title", "Unknown Product")
 
         try:
-            parser = get_parser(url)
-            result = await parser.parse(url)
+            result = await _parse_with_timeout(url)
             new_price = result["price"]
 
             await update_product_price(
