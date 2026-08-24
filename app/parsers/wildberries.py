@@ -1,4 +1,4 @@
-"""Wildberries parser via public JSON API (fast, no browser needed)."""
+"""Wildberries parser via public JSON API with browser headers."""
 
 import logging
 import re
@@ -10,7 +10,7 @@ from app.parsers.base import BaseParser, ParseError
 
 logger = logging.getLogger(__name__)
 
-API_URL = "https://card.wb.ru/cards/detail"
+API_URL = "https://card.wb.ru/cards/v2/detail"
 
 
 class WildberriesParser(BaseParser):
@@ -41,8 +41,25 @@ class WildberriesParser(BaseParser):
             "dest": "-1257786",
             "nm": article,
             "spp": "30",
+            "ab_testing": "1",
         }
-        headers = {"User-Agent": self.user_agent, "Accept": "application/json"}
+        
+        # Browser-like headers to avoid 403
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Origin": "https://www.wildberries.ru",
+            "Referer": f"https://www.wildberries.ru/catalog/{article}/detail.aspx",
+            "Connection": "keep-alive",
+            "Sec-Fetch-Dest": "empty",
+            "Sec-Fetch-Mode": "cors",
+            "Sec-Fetch-Site": "cross-site",
+            "Sec-Ch-Ua": '"Chromium";v="128", "Not;A=Brand";v="24", "Google Chrome";v="128"',
+            "Sec-Ch-Ua-Mobile": "?0",
+            "Sec-Ch-Ua-Platform": '"Windows"',
+        }
 
         try:
             async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
